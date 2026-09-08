@@ -8,10 +8,10 @@ English: [README.md](README.md)
 build**，把這個故障和它的修法直接演示出來。如果你是搜尋進來的，[到底哪裡壞了](#到底哪裡壞了)
 大概才是你要的；這個 demo 的存在只是讓你能在兩分鐘內親手驗證一次。
 
-![錯誤 driver 在 rotation 0：報告頁畫出來了，但右側一條仍顯示上一頁的色帶，而且永遠不更新](docs/img/wrong-rot0-residual.jpg)
+![錯誤 driver 上的全螢幕白色填滿：大部分面板變白，但右側一條仍完整顯示著上一頁畫面，而且永遠不更新](docs/img/wipe-fail-old-page-survives.jpg)
 
-*Clone 面板配 `ILI9341_DRIVER`。報告頁畫得好好的 —— 但右側那一條還顯示著**上一頁**的色帶，
-而且永遠不會更新。另外注意 `LAST-ROW OK`：sketch 是把它畫在畫布底部的，它卻出現在標題區。*
+*Clone 面板配 `ILI9341_DRIVER`，`fillScreen(TFT_WHITE)` 執行到一半。右側那一條還完整顯示著
+**上一整頁畫面** —— 標題文字、`FR7`，全部都在。`fillScreen()` 到不了那裡，你畫什麼都到不了。*
 
 ---
 
@@ -34,8 +34,10 @@ build**，把這個故障和它的修法直接演示出來。如果你是搜尋�
 
 | | |
 |---|---|
-| ![色帶變成縱向條紋，左側留著上一頁文字的殘影](docs/img/wrong-bands-rotated.jpg) | ![報告頁重疊畫了兩次，其中一份上下顛倒](docs/img/wrong-wrapped-doubled.jpg) |
-| 四色帶填色，左側那條是上一頁文字的殘留 —— 填色蓋不掉它。 | 另一個 rotation 下的繞回：整頁疊在自己身上，其中一份是倒的。 |
+| ![白色填滿，左側留著一條暗紅色，wipe test 的說明文字印了兩次、其中一次倒著](docs/img/wipe-fail-stale-strip.jpg) | ![白色填滿，左側留著上一次的填色，底部有一份鏡像的說明文字](docs/img/wipe-fail-wrapped-text.jpg) |
+| 同一個 build、不同 rotation：殘留那條跳到了**左邊**，裡面是*上一次*的填色。說明文字出現兩次 —— 繞回把它又印了一次。 | 另一個角度看繞回：底部那一行是倒著的第二份說明文字。 |
+| ![色帶到不了右側，那裡還讀得到上一頁的文字](docs/img/wipe-fail-bands-blocked.jpg) | ![報告頁重疊畫了兩次，其中一份上下顛倒](docs/img/wrong-wrapped-doubled.jpg) |
+| 四色帶同樣到不了右側那條 —— 上一頁的文字還讀得出來。 | 診斷頁的繞回：整頁疊在自己身上，其中一份是倒的。 |
 
 ---
 
@@ -66,10 +68,14 @@ Demo 一開始是 **wipe test**：用純色把整個畫布填滿，白色和深�
 **螢幕上其他東西都是診斷資訊，不是判決。** 這點值得說白，因為這正是這個 demo 重做過一次
 才避開的陷阱：
 
-面板壞著的時候，driver 自己那塊 240×320 畫布**依然完全自洽**。`tft.width()` 回傳 `240`。
-Column ruler 的 `239` 標籤畫得出來。`RIGHT-EDGE OK` 和 `LAST-ROW OK` 兩個都畫得出來、
-都讀得清楚 —— 上面那張照片裡它們正是這樣，而那塊面板明顯是壞的。任何畫在 driver 座標系
-裡的 marker 都會回報通過。錯的不是畫布，是那塊畫布落在玻璃上的位置。只有整片填色測得出來。
+面板壞著的時候，driver 自己那塊 240×320 畫布**依然完全自洽**。任何畫在 driver 座標系裡的
+marker 都會回報通過。錯的不是畫布，是那塊畫布落在玻璃上的位置。只有整片填色測得出來。
+
+![錯誤 driver 上的診斷頁：RIGHT-EDGE OK、LAST-ROW OK 和 ruler 的 239 標籤全部正常顯示，而面板有一條還顯示著上一頁](docs/img/wrong-rot0-residual.jpg)
+
+*每一個 marker 都通過。`tft.width()` 回傳 `240`，ruler 的 `239` 標籤在，`RIGHT-EDGE OK` 和
+`LAST-ROW OK` 都讀得清楚 —— 而面板有一條還顯示著上一頁。這張照片就是 wipe test 存在的理由。
+（`LAST-ROW OK` 是畫在畫布底部的，這裡出現在標題區 —— 那就是繞回。）*
 
 ---
 
@@ -168,6 +174,13 @@ TFT_eSPI 把 clone 的暫存器組收錄成一個獨立的 driver。就這樣而
 | **TFT_eSPI**（bodmer） | `ILI9341_2_DRIVER` —— 本專案實測可行的路徑 |
 | **LovyanGFX** | `Panel_ILI9341_2` 類別（但請看下方的 MADCTL 警告） |
 | **Adafruit_ILI9341** | **沒有，也沒有任何 flag。** 換函式庫到 TFT_eSPI 或 LovyanGFX 本身就是修復的一部分。 |
+
+### 什麼**不能**修好它
+
+**用不同的 rotation 初始化。** 因為 `setRotation()` 會重寫 `MADCTL`，這是很自然會想試的一招，
+而且看起來*像*有進展：在一塊 CYD 上，這讓原本根本不會亮的面板能初始化成功。但就到此為止 ——
+**面板 init 得了，畫進去還是壞的**。把換 rotation 當成「讓一塊板子先有反應」的手段，
+不要當成修復：暫存器組還是錯的，而只有 driver 變體能處理那件事。
 
 ### 接下來可能出現的兩個副作用
 

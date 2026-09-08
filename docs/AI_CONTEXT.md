@@ -97,6 +97,16 @@ Use the clone register set:
 | **LovyanGFX** | `Panel_ILI9341_2` class instead of `Panel_ILI9341` | fixes the dead region, but see the MADCTL warning below |
 | **Adafruit_ILI9341** | **not available** | this library has no clone variant. Switching library is part of the fix. |
 
+### A near-miss the user may already have tried
+
+**Initialising at a different rotation is not a fix.** `setRotation()` rewrites
+`MADCTL`, so it is a natural thing to reach for and it can produce visible
+progress: CONFIRMED on a CYD, it got the panel to initialise at all when it
+otherwise would not. It stops there — the panel comes up, and drawing into it is
+still broken. If the user reports "changing rotation made it start working", ask
+what the panel does when it *draws*, and steer them to the driver variant. Do not
+record the rotation change as the solution.
+
 ### Two follow-on symptoms that appear AFTER the fix
 
 Both are expected and are not the fix having failed. Do not let the user conclude the

@@ -10,14 +10,14 @@ failure and its fix **on one board, with one source file, in two builds**. If yo
 landed here from a search, [the explanation](#what-is-actually-wrong) is probably
 what you want; the demo exists so you can prove it to yourself in two minutes.
 
-![The wrong driver at rotation 0: the report page is drawn, but a strip on the
-right still shows colour bands from the previous screen and never
-updates](docs/img/wrong-rot0-residual.jpg)
+![A full-screen white fill on the wrong driver: most of the panel is white, but a
+strip down the right-hand side still shows the entire previous screen and never
+updates](docs/img/wipe-fail-old-page-survives.jpg)
 
-*`ILI9341_DRIVER` on a clone panel. The report page drew fine — but the strip on
-the right is still showing the colour bands from the **previous** screen, and it
-never updates. Note also `LAST-ROW OK`, which the sketch draws near the bottom of
-the canvas, appearing up in the header instead.*
+*`ILI9341_DRIVER` on a clone panel, mid-way through a `fillScreen(TFT_WHITE)`.
+The strip on the right is still displaying the **entire previous screen** —
+header text, `FR7`, everything. `fillScreen()` cannot reach it. No amount of
+drawing will.*
 
 ---
 
@@ -45,8 +45,10 @@ rotation you can easily conclude the panel is fine.
 
 | | |
 |---|---|
-| ![Colour bands drawn as vertical stripes with a strip of leftover text on the left](docs/img/wrong-bands-rotated.jpg) | ![The report page drawn twice, overlapping itself, one copy upside down](docs/img/wrong-wrapped-doubled.jpg) |
-| The four-band fill, with a strip of leftover text from the previous screen that the fill could not clear. | Wrapping in another rotation: the page is drawn over itself, one copy inverted. |
+| ![A white fill with a maroon strip surviving down the left side, and the wipe-test caption printed twice, once upside down](docs/img/wipe-fail-stale-strip.jpg) | ![A white fill with the previous fill colour surviving on the left and a mirrored duplicate of the caption at the bottom](docs/img/wipe-fail-wrapped-text.jpg) |
+| Another rotation, same build: now the stale strip is on the **left**, holding the *previous* wipe colour. The caption appears twice — the wrap, printing it a second time. | The wrap again, from a different angle: a second, inverted copy of the caption along the bottom edge. |
+| ![Colour bands stop short of the right-hand side, where the previous screen's text is still legible](docs/img/wipe-fail-bands-blocked.jpg) | ![The report page drawn twice, overlapping itself, one copy upside down](docs/img/wrong-wrapped-doubled.jpg) |
+| The four-band fill cannot reach the right-hand strip either — the previous screen's text is still readable there. | Wrapping in the diagnosis page: it is drawn over itself, one copy inverted. |
 
 ---
 
@@ -82,12 +84,19 @@ colour, several times, alternating white and navy, in all four rotations.
 blunt about, because it is the trap this demo was rebuilt to avoid:
 
 The driver's own 240×320 canvas stays perfectly self-consistent while the panel
-is broken. `tft.width()` returns `240`. The column ruler's `239` label renders.
-`RIGHT-EDGE OK` and `LAST-ROW OK` both draw and both read cleanly — you can see
-them doing exactly that in the photo above, on a panel that is plainly faulty.
-Any marker drawn in driver coordinates will report a pass. What is wrong is not
-the canvas; it is where the canvas lands on the glass. Only a full-screen wipe
-tests that.
+is broken. Any marker drawn in driver coordinates will report a pass. What is
+wrong is not the canvas; it is where the canvas lands on the glass. Only a
+full-screen wipe tests that.
+
+![The diagnosis page on the wrong driver: RIGHT-EDGE OK, LAST-ROW OK and the
+ruler's 239 label all render correctly while a strip of the panel still shows the
+previous screen](docs/img/wrong-rot0-residual.jpg)
+
+*Every marker passes. `tft.width()` returns `240`, the ruler's `239` label is
+there, `RIGHT-EDGE OK` and `LAST-ROW OK` both read cleanly — and a strip of the
+panel is still showing the previous screen. This photo is why the wipe test
+exists. (`LAST-ROW OK` is drawn at the bottom of the canvas and appears in the
+header here; that is the wrap.)*
 
 ---
 
@@ -205,6 +214,15 @@ On other libraries:
 | **TFT_eSPI** (bodmer) | `ILI9341_2_DRIVER` — this is the path confirmed working here |
 | **LovyanGFX** | the `Panel_ILI9341_2` class (but read the MADCTL note below) |
 | **Adafruit_ILI9341** | **none — there is no flag.** Migrating to TFT_eSPI or LovyanGFX is part of the fix. |
+
+### What does not fix it
+
+**Initialising at a different rotation.** Because `setRotation()` rewrites
+`MADCTL`, it is a natural thing to try, and it *looks* like progress: on a CYD it
+got the panel to come up at all when it otherwise would not. But it stops there.
+The panel initialises; drawing into it is still broken. Treat a different
+rotation as a way to get a first sign of life out of a board, not as a fix — the
+register set is still wrong, and only the driver variant addresses that.
 
 ### Two side effects you might hit next
 
