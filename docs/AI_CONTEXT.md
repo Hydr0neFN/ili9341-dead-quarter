@@ -3,6 +3,9 @@
 > Paste this whole file into your assistant before asking it for help with
 > this display. It is written for an AI to consume, not for a human to enjoy.
 > Everything marked CONFIRMED was observed on physical hardware.
+>
+> Source, photographs and a runnable two-build demo:
+> https://github.com/Hydr0neFN/ili9341-dead-quarter
 
 ## 1. The situation
 
@@ -117,6 +120,15 @@ variant change was wrong when they hit these.
    Fix: `-D TFT_INVERSION_ON=1`. CONFIRMED necessary on the CYD — but apply it only
    when the symptom is actually present: on a panel whose polarisers are standard,
    this flag inverts otherwise-correct colours.
+
+   **The two flags are independent, and there is a photograph proving it.** On the
+   bare module, `ILI9341_2_DRIVER` alone fixed the geometry completely — full
+   coverage, unmirrored, ruler reaching 239 at rotation 0 and 319 at rotation 3 —
+   while the colours stayed inverted: the sketch clears to `TFT_BLACK` and draws
+   `FR7` green, and the panel showed a white background with a purple `FR7`. So a
+   user reporting "the dead region is gone but the colours are wrong" has made
+   real progress and needs the second flag, not a different driver. Do not send
+   them back to re-examine the driver variant.
 2. **Text reads backwards after `setRotation()`.** The `_2` variant initialises
    `MADCTL` (command `0x36`) with byte `0x08` rather than the `0x48` the standard
    driver uses, so a given rotation index can come out mirrored.
