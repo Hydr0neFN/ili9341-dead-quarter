@@ -1,40 +1,52 @@
 # The Dead Quarter
 
-**Why a quarter of your cheap 2.8" ILI9341 panel shows static — and the one build
+**A quarter of your cheap 2.8" ILI9341 panel never updates — and the one build
 flag that fixes it.**
 
 繁體中文版：[README.zh-TW.md](README.zh-TW.md)
 
 A minimal PlatformIO project for the NodeMCU v3 (ESP8266) that demonstrates this
 failure and its fix **on one board, with one source file, in two builds**. If you
-landed here from a search, [the explanation](#why-this-happens) is probably what
-you want; the demo exists so you can prove it to yourself in about two minutes.
+landed here from a search, [the explanation](#what-is-actually-wrong) is probably
+what you want; the demo exists so you can prove it to yourself in two minutes.
+
+![The wrong driver at rotation 0: the report page is drawn, but a strip on the
+right still shows colour bands from the previous screen and never
+updates](docs/img/wrong-rot0-residual.jpg)
+
+*`ILI9341_DRIVER` on a clone panel. The report page drew fine — but the strip on
+the right is still showing the colour bands from the **previous** screen, and it
+never updates. Note also `LAST-ROW OK`, which the sketch draws near the bottom of
+the canvas, appearing up in the header instead.*
 
 ---
 
 ## The symptom
 
-After `tft.init()`, roughly three quarters of the panel draws correctly. The
-remaining **last quarter** shows static that never changes, no matter what your
-program draws into it.
+After `tft.init()`, most of the panel draws correctly, but **roughly a quarter of
+it never updates**. It keeps showing whatever was on screen before — old text
+under new graphics, old colour bands beside new text — no matter what your
+program draws.
 
 It is not a wiring fault, not a bad panel, not SPI running too fast, and not a
 buffer-size problem in your sketch. It is the wrong controller init sequence.
 
-### It looks like it moves, but it doesn't
+Two more things go with it, and both are useful for identification:
 
-The dead region is always the last quarter of the panel's memory, and physically
-always the same edge: **the one opposite the pin header**. What changes is how it
-*appears*, and that depends only on `setRotation()`:
+**Content wraps around.** Anything drawn near the end of the canvas turns up near
+the *start* of the panel. In the photo above, `LAST-ROW OK` and the `BL` / `BR`
+corner labels are drawn at the bottom of a 320-pixel-tall canvas, and they appear
+in the header area instead.
 
-| Orientation | How the same defect looks |
+**The dead strip moves between rotations.** `setRotation()` rewrites `MADCTL`,
+which changes the scan direction, so the unreachable region jumps to a different
+physical edge. It is *not* fixed to one side of the board — if you check only one
+rotation you can easily conclude the panel is fine.
+
+| | |
 |---|---|
-| portrait, `setRotation(0)` | a band across the bottom — in a four-band colour test, the fourth band never arrives |
-| landscape, `setRotation(1)` | a strip down one side |
-
-Both descriptions are out there in forum posts and issue threads, and they read
-like two different bugs. They are the same one. If you searched for "right-hand
-columns" and found nothing useful, try the other description.
+| ![Colour bands drawn as vertical stripes with a strip of leftover text on the left](docs/img/wrong-bands-rotated.jpg) | ![The report page drawn twice, overlapping itself, one copy upside down](docs/img/wrong-wrapped-doubled.jpg) |
+| The four-band fill, with a strip of leftover text from the previous screen that the fill could not clear. | Wrapping in another rotation: the page is drawn over itself, one copy inverted. |
 
 ---
 
@@ -45,20 +57,41 @@ so anything you see on the glass is caused by the init sequence and nothing else
 
 | Environment | Driver flag | Expected result |
 |---|---|---|
-| `nodemcu_wrong` | `ILI9341_DRIVER` | last ~25% of the panel never written — static noise |
-| `nodemcu_right` | `ILI9341_2_DRIVER` | full panel addressed correctly |
+| `nodemcu_wrong` | `ILI9341_DRIVER` | ~25% of the panel never updates |
+| `nodemcu_right` | `ILI9341_2_DRIVER` | whole panel addressed correctly |
 
 ```sh
 pio run -e nodemcu_wrong -t upload && pio device monitor
 pio run -e nodemcu_right -t upload && pio device monitor
 ```
 
-The sketch reports its compiled driver over serial and on screen, so the build and
-the physical panel can be compared directly.
+The sketch reports its compiled driver over serial and on screen, so the build
+and the physical panel can be compared directly.
+
+### The one check that matters
+
+The demo opens with a **wipe test**: it fills the entire canvas with a flat
+colour, several times, alternating white and navy, in all four rotations.
+
+> If the driver and the panel agree on the geometry, the whole physical panel
+> changes colour together, every time. Any patch that keeps showing the previous
+> screen is outside the addressable window, and nothing you draw will ever reach
+> it.
+
+**Everything else on screen is diagnosis, not a verdict.** This is worth being
+blunt about, because it is the trap this demo was rebuilt to avoid:
+
+The driver's own 240×320 canvas stays perfectly self-consistent while the panel
+is broken. `tft.width()` returns `240`. The column ruler's `239` label renders.
+`RIGHT-EDGE OK` and `LAST-ROW OK` both draw and both read cleanly — you can see
+them doing exactly that in the photo above, on a panel that is plainly faulty.
+Any marker drawn in driver coordinates will report a pass. What is wrong is not
+the canvas; it is where the canvas lands on the glass. Only a full-screen wipe
+tests that.
 
 ---
 
-## Why this happens
+## What is actually wrong
 
 ### The controller isn't really an ILI9341
 
@@ -74,43 +107,49 @@ of it works.
 What the clone does **not** share is the startup sequence. It needs different
 internal power settings (registers `PWCTR1` and `PWCTR2`), different
 liquid-crystal voltage levels (VCOM, via `VMCTR1` and `VMCTR2`), different
-colour-curve corrections (the gamma tables), and it has a different default for
+colour-curve corrections (the gamma tables), and a different default for
 `MADCTL` — the register that defines orientation and memory scan direction.
 
-Sending it the sequence a genuine ILI9341 expects leaves the clone misreading
-those power and orientation commands, and it comes up with its address window —
-the region of its own memory it will accept writes into — covering only about
-three quarters of the panel. Anything written past that limit is discarded, with
-no error of any kind.
+### The driver and the panel disagree about the geometry
 
-### Why static, and not black
+After a stock ILI9341 init, the clone does not lay its memory out the way the
+driver assumes. The library keeps writing a 240-wide, 320-tall canvas; the panel
+accepts those writes into a differently-shaped region. Two consequences follow,
+and they are exactly what the photos show:
 
 ```
-   your sketch calls fillScreen(RED)
+   library writes a 240 x 320 canvas
               |
               v
-   library writes 240 x 320 pixels of red
+   panel accepts it into a region of a different shape
               |
-              v
-   controller accepts them -- but only up to the limit of
-   its (wrongly configured) address window
-              |
-              +-----------------------------+
-              |                             |
-              v                             v
-    the first three quarters,        the last quarter,
-    inside the window                outside it
-    -> become red                    -> receives nothing
-                                            |
-                                            v
-                                     it still holds whatever
-                                     was in GRAM from before
+              +---------------------------+
+              |                           |
+              v                           v
+   along one axis the canvas       along the other it runs
+   is SHORTER than the panel       PAST the end of the panel
+              |                           |
+              v                           v
+   ~25% of the glass is never      the overflow wraps around
+   written -> keeps showing        -> bottom-of-canvas content
+   the previous screen             appears at the top
 ```
+
+`240 / 320 = 75%`, which is where the missing quarter comes from, and it is the
+same proportion reported on the CYD.
+
+> **Scope note.** The register-level cause was not traced — no logic analyser was
+> put on the bus. What is confirmed is the behaviour above, on two different
+> boards, and that switching the driver variant fixes it. The geometry
+> explanation is the reading that accounts for all of the observations; treat the
+> mechanism as inference and the symptoms and the fix as fact.
+
+### Why the unreachable region shows old content, not black
 
 GRAM (Graphics RAM) is the video memory inside the display controller itself, not
-in the microcontroller. It powers up holding undefined values and it is never
-cleared unless something writes to it. The region your sketch could not reach is
-showing you that undefined content.
+in the microcontroller. It is never cleared unless something writes to it, so a
+region your sketch cannot reach simply keeps displaying whatever was last written
+there — or, right after power-on, undefined noise.
 
 That is the whole reason this bug is so confusing: it doesn't look like an error.
 It looks like the display is showing a *different program's* output, or like the
@@ -124,12 +163,11 @@ identifier over SPI: some clones return nothing, some return random values, some
 return a genuine ILI9341 ID despite having incompatible internals.
 
 So every graphics library on every platform picks its register set from a
-compile-time `#define` and simply trusts it. `tft.width()` still returns `240` on
-the broken build — the firmware genuinely believes it is addressing the whole
-panel.
+compile-time `#define` and simply trusts it. The firmware genuinely believes it is
+addressing the whole panel, and every self-check it can perform agrees with it.
 
 **You are the detector.** There is no software check the MCU can run on its own;
-the fault can only be verified by looking at the physical screen.
+the fault can only be seen by looking at the physical screen.
 
 ---
 
@@ -140,13 +178,14 @@ this *before* you start re-seating jumper wires.
 
 | | Wrong init sequence | Bad wiring / SPI too fast |
 |---|---|---|
-| Where the corruption starts | a straight, clean boundary in **the same place every single boot**, on the edge opposite the pins | no clean boundary |
+| The affected region | a clean, straight-edged area that **never updates** | no clean boundary |
 | Behaviour over time | perfectly stable | sparkles, flickers, changes |
+| Between rotations | the region moves to a different edge | unrelated to rotation |
 | Effect of lowering `SPI_FREQUENCY` | none at all | improves or disappears |
 
-A stable boundary in a fixed place is the signature of this bug. If dropping the
-SPI clock from 40 MHz to 27 MHz helps, you have the *other* problem — signal
-integrity on long jumper wires, and no driver flag will fix it.
+A stable, hard-edged region that refuses to update is the signature of this bug.
+If dropping the SPI clock from 40 MHz to 27 MHz helps, you have the *other*
+problem — signal integrity on long jumper wires, and no driver flag will fix it.
 
 ---
 
@@ -223,32 +262,26 @@ The touch header (`T_CLK` / `T_CS` / `T_DIN` / `T_DO` / `T_IRQ`) is left
 unconnected. This demo is display-only on purpose: touch is a separate XPT2046
 controller and adds nothing to the question of whether the panel initialises.
 
-If you see sparkle or intermittent noise, drop `SPI_FREQUENCY` from `40000000`
-to `27000000`. That is signal integrity on long jumper wires — a different
-problem from the one above, and it moves and flickers where the init boundary
-does not.
+If you see sparkle or intermittent noise, drop `SPI_FREQUENCY` from `40000000` to
+`27000000`. That is signal integrity on long jumper wires — a different problem
+from the one above, and it moves and flickers where an unreachable region does
+not.
 
 ---
 
 ## What the demo draws
 
-1. **Four-band fill** (red / green / blue / magenta, full width) — a missing or
-   truncated band is obvious with no reading required. On a mis-initialised clone
-   the **last** band is the one that goes.
-2. **Edge frame + corner ticks** — the ticks on the far edge disappear when the
-   panel is only partially addressed.
-3. **Column ruler**, labelled every 40 px, with the last addressable column marked
-   in red. If the panel reports 240 wide but the `239` label isn't there, the
-   panel and the driver disagree.
-4. **Two pass/fail strings, one per axis** — `RIGHT-EDGE OK` against the side
-   edge, `LAST-ROW OK` against the final row, plus a solid bar hard against the
-   last line. Both must be fully readable.
-
-   A single-axis marker is not enough: the dead region lands on a different axis
-   depending on rotation, so one marker passes the test in half the rotations
-   while the panel is still broken.
-5. **`FR7` + `BL` / `BR` corner labels** — mirror detection.
-6. It cycles all four rotations, then repeats.
+1. **Wipe test**, in all four rotations — the pass/fail check described above.
+   Everything below this line is diagnosis.
+2. **Four-band fill** (red / green / blue / magenta, full width) — an unreachable
+   region is obvious without reading anything, and whatever survives from the
+   previous screen proves the wipe could not clear it.
+3. **Edge frame + corner ticks.**
+4. **Column ruler**, labelled every 40 px, with the last addressable column marked
+   in red — catches a driver that disagrees with *itself* about the canvas size.
+5. **`RIGHT-EDGE OK` and `LAST-ROW OK`** — same purpose. Read them as "the canvas
+   is internally consistent", never as "the panel is fine".
+6. **`FR7` + `BL` / `BR` corner labels** — mirror detection.
 
 ---
 
@@ -269,8 +302,8 @@ Two practical differences:
 
 ### Known-good CYD configuration (ESP32-2432S028)
 
-That board *is* this panel soldered to an ESP32, so everything above applies to
-it unchanged.
+That board *is* this panel soldered to an ESP32, so everything above applies to it
+unchanged.
 
 ```ini
 -D USER_SETUP_LOADED=1
@@ -303,11 +336,14 @@ it unchanged.
 - [`docs/AI_CONTEXT.md`](docs/AI_CONTEXT.md) is the same knowledge written for an
   LLM to consume — paste it into an assistant before asking it for help with this
   panel. It includes a diagnosis priority order, because the default reflex when
-  told "half my screen is noise" is to investigate wiring, which is exactly the
+  told "part of my screen is wrong" is to investigate wiring, which is exactly the
   wrong first move here.
+- Photos in [`docs/img/`](docs/img/) are of the actual failure on the actual
+  hardware, not mock-ups.
 
 Everything stated here was observed on physical hardware: the bare module on a
-NodeMCU v3, and previously an ESP32-2432S028.
+NodeMCU v3, and previously an ESP32-2432S028. Where something is inference rather
+than observation, it says so.
 
 ## License
 

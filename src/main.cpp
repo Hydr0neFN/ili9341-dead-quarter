@@ -6,16 +6,26 @@
 // difference you see on the glass is caused by the init/register sequence
 // and nothing else.
 //
-// What to look for when the wrong variant is compiled in:
-//   * roughly the LAST QUARTER of the panel's memory never gets written -- it
-//     shows static noise (whatever was left in GRAM), not the fill colour, and
-//     it never changes no matter what the sketch draws
-//   * physically it is always the same edge: the one farthest from the pin
-//     header. Which way it LOOKS depends only on setRotation() -- a band across
-//     the bottom in portrait, a strip down one side in landscape. Same defect.
-//   * because of that, the pass/fail markers below are placed at BOTH the far
-//     row and the far column. A marker in only one axis passes in the rotation
-//     where the dead region happens to sit on the other axis.
+// What to look for when the wrong variant is compiled in (all CONFIRMED on
+// hardware, see docs/img/):
+//   * roughly a QUARTER of the physical panel is never written. It keeps
+//     showing whatever was drawn before -- old text under new colour bands,
+//     old colour bands beside new text -- and never updates.
+//   * content that should be near the end of the canvas (LAST-ROW OK, the
+//     BL/BR corner labels) appears near the START of the panel instead: the
+//     writes run past the addressable area and wrap around.
+//   * the dead strip MOVES BETWEEN ROTATIONS. setRotation() rewrites MADCTL,
+//     which changes the scan direction, so the untouched region jumps to a
+//     different physical edge. It is not fixed to one side of the board.
+//
+// IMPORTANT -- why the on-screen markers below cannot detect this:
+//   The driver's own 240x320 canvas stays internally consistent. Every marker
+//   drawn in driver coordinates -- RIGHT-EDGE OK, LAST-ROW OK, the ruler's
+//   239 label -- renders correctly and reads as a PASS while the panel is
+//   plainly broken. What is wrong is where that canvas lands on the glass.
+//   Only drawWipeTest() below catches this class of fault, because it tests
+//   the one thing the driver cannot fake: whether fillScreen() actually
+//   covers the whole physical panel.
 //
 // The asymmetric "FR7" text and the corner labels are there to expose a
 // second, independent failure: a mirrored MADCTL. Symmetric test patterns
@@ -81,10 +91,41 @@ static void drawColumnRuler(int16_t y) {
   tft.print(w - 1);
 }
 
-// Fills the screen in four horizontal bands. Any band that is missing, or that
-// does not reach the far edge, is uninitialised GRAM -- the controller never
-// accepted those writes. On a mis-initialised clone the LAST band is the one
-// that goes, because it is the last region written.
+// THE test. Everything else on screen is diagnosis; this is the pass/fail.
+//
+// Fills the entire canvas with one flat colour, several times, alternating
+// between two colours that cannot be confused with each other. If the driver
+// and the panel agree on the geometry, the whole physical panel changes colour
+// together, every time.
+//
+// If they do not agree, some region never takes the fill and keeps showing the
+// previous screen. That region is outside the addressable window, and no amount
+// of drawing will ever reach it. This is the only check here that the driver
+// cannot pass while being wrong, because it tests coverage of the glass rather
+// than consistency of the canvas.
+static void drawWipeTest() {
+  const uint16_t colours[] = {TFT_WHITE, TFT_NAVY, TFT_WHITE, TFT_NAVY};
+
+  for (uint8_t i = 0; i < 4; i++) {
+    tft.fillScreen(colours[i]);
+
+    tft.setTextFont(2);
+    tft.setTextColor(colours[i] == TFT_WHITE ? TFT_BLACK : TFT_WHITE);
+    tft.setCursor(6, 6);
+    tft.print(F("WIPE TEST"));
+    tft.setTextFont(1);
+    tft.setCursor(6, 26);
+    tft.print(F("whole panel must be one flat colour"));
+    tft.setCursor(6, 38);
+    tft.print(F("any leftover patch = outside the window"));
+
+    delay(900);
+  }
+}
+
+// Fills the screen in four horizontal bands. Two jobs: it makes an unreachable
+// region obvious without reading anything, and the bands persist into the next
+// screen if the wipe cannot clear them -- which is exactly the symptom.
 static void drawBandedFill() {
   const int16_t w = tft.width();
   const int16_t h = tft.height();
@@ -130,10 +171,11 @@ static void drawReport(uint8_t rotation) {
 
   drawColumnRuler(96);
 
-  // Two pass/fail indicators, one per axis. The dead region sits at the panel
-  // edge farthest from the pin header, which lands on a different axis
-  // depending on rotation -- a single marker would pass in half the rotations
-  // while the panel is still broken. Both must be fully readable.
+  // Two edge markers, one per axis. Read them as "the canvas is internally
+  // consistent", NOT as "the panel is fine" -- both render perfectly on a
+  // mis-initialised clone (see the header comment). They are here to catch a
+  // driver that disagrees with itself about the canvas size, which is a
+  // different fault from the one drawWipeTest() hunts.
   tft.setTextFont(2);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
 
@@ -177,11 +219,22 @@ void setup() {
 }
 
 void loop() {
-  // 1. Banded fill: shows dead columns at a glance, no text needed.
+  // 1. The actual pass/fail test. Run it in every rotation, because the
+  //    unreachable region moves when setRotation() rewrites MADCTL -- a single
+  //    rotation can look clean while another does not.
+  for (uint8_t rot = 0; rot < 4; rot++) {
+    tft.setRotation(rot);
+    drawWipeTest();
+  }
+
+  // 2. Banded fill: an unreachable region is obvious without reading anything,
+  //    and whatever survives here proves the wipe above could not clear it.
+  tft.setRotation(0);
   drawBandedFill();
   delay(2500);
 
-  // 2. Full report in portrait, then in landscape.
+  // 3. Diagnosis detail -- ruler, edge markers, mirror check -- in each
+  //    rotation. Useful once the wipe test passes; not a substitute for it.
   for (uint8_t rot = 0; rot < 4; rot++) {
     tft.setRotation(rot);
     drawReport(rot);

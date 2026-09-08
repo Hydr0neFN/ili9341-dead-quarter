@@ -18,23 +18,30 @@ an ESP32.
 
 ## 2. The failure mode — read this before diagnosing anything
 
-**Symptom:** after `tft.init()`, roughly three quarters of the panel displays
-real (if oddly coloured) data. The remaining **last quarter** shows static noise
-that never changes, no matter what the program draws into it.
+**Symptom:** after `tft.init()`, most of the panel draws correctly but roughly a
+**quarter of it never updates**. That region keeps showing whatever was on screen
+before — old text under new graphics, old colour bands beside new text — no matter
+what the program draws.
 
-**Geometry — get this right or you will misdiagnose it.** The dead region is
-always the last quarter of the panel's memory, and physically always the same
-edge: the one **opposite the pin header**. It does not move. What changes is how
-it *appears*, and that depends only on `setRotation()`:
+**Two companion symptoms, both CONFIRMED on hardware:**
 
-| Orientation | How the same defect looks |
-|---|---|
-| portrait (`setRotation(0)`) | a band across the bottom — in a four-band colour test, the fourth band never arrives |
-| landscape (`setRotation(1)`) | a strip down one side |
+1. **Content wraps.** Anything drawn near the end of the canvas appears near the
+   *start* of the panel. A string drawn at `y = height - 34` on a 320-tall canvas
+   turns up in the header area.
+2. **The unreachable region moves between rotations.** `setRotation()` rewrites
+   `MADCTL`, changing the scan direction, so the region jumps to a different
+   physical edge. It is **not** fixed to one side of the board. A user who checked
+   only one rotation may report "it looks fine now" while it is not.
 
-Both descriptions appear in the wild and they are the same fault. CONFIRMED on
-both the bare module (portrait) and the CYD (landscape). Do not treat a
-"bottom band" report and a "right-hand columns" report as different problems.
+**CRITICAL — do not accept on-screen markers as evidence of health.** The driver's
+own 240x320 canvas stays fully self-consistent while the panel is broken:
+`tft.width()` returns 240, a column ruler's `239` label renders, right-aligned and
+bottom-aligned "OK" strings both draw and both read cleanly. Every marker drawn in
+driver coordinates reports a pass. The canvas is not what is wrong; where it lands
+on the glass is. **The only valid test is a full-screen fill:** fill the whole
+canvas with a flat colour and ask whether the entire physical panel changed. Any
+patch still showing the previous screen is outside the addressable window. Run it
+in all four rotations, because of symptom 2.
 
 **This is NOT:**
 - a wiring fault
@@ -47,16 +54,18 @@ modules is an ILI9341 *clone*. It accepts the same command opcodes but requires 
 different init sequence — different power control (`PWCTR1`/`PWCTR2`), different VCOM
 (`VMCTR1`/`VMCTR2`), different gamma tables, and a different `MADCTL` base value.
 
-Sent a stock ILI9341 init, the clone ends up with an address window covering only
-about three quarters of its own memory. Pixel writes land only inside that window;
-everything past the limit is discarded with no error. The region outside is never
-written, so it still holds whatever was in GRAM from before — which is why the result
-looks like "leftover content from a previous program" rather than like an error.
+**Mechanism (INFERENCE — flag it as such if you repeat it).** After a stock ILI9341
+init the clone does not lay its memory out the way the driver assumes. The library
+keeps writing a 240-wide, 320-tall canvas; the panel accepts those writes into a
+differently-shaped region. Along one axis the canvas is shorter than the panel, so
+about a quarter of the glass is never written; along the other it runs past the end,
+so the overflow wraps. `240 / 320 = 75%`, which matches the observed missing
+quarter, and matches the proportion reported on the CYD. The register-level cause
+was not traced with a logic analyser. Treat the symptoms and the fix as fact and
+this paragraph as the reading that accounts for them.
 
-CONFIRMED: the dead region is **never written**, not mis-addressed. Its content does
-not change at all between redraws or between boots. If the user reports content there
-that *does* change but is scrambled or offset, that is a different fault and this
-document does not cover it.
+The unreachable region shows old content rather than black because GRAM is the
+controller's own video memory and is never cleared unless written to.
 
 **Why the firmware cannot detect this itself:** ILI9341-class panels do not reliably
 return a readable device ID over SPI. Every graphics library therefore selects its
@@ -69,7 +78,7 @@ screen is the only detector.
 
 | | wrong init sequence | signal integrity (long jumpers, SPI too fast) |
 |---|---|---|
-| boundary | straight and clean, **in the same place every boot**, on the edge opposite the pins | none / moves / flickers |
+| affected region | clean straight edges, **never updates**, moves to another edge when rotation changes | no clean boundary; unrelated to rotation |
 | changes with `SPI_FREQUENCY` | no | yes |
 | changes between redraws | no | yes |
 
@@ -172,34 +181,46 @@ One PlatformIO project, **identical `src/main.cpp`**, two environments:
 
 | env | flag | expected result |
 |---|---|---|
-| `nodemcu_wrong` | `-D ILI9341_DRIVER=1` | last ~25% of the panel = static noise (in portrait, the fourth colour band) |
+| `nodemcu_wrong` | `-D ILI9341_DRIVER=1` | ~25% of the panel never updates; content wraps |
 | `nodemcu_right` | `-D ILI9341_2_DRIVER=1` | full screen addressed correctly |
 
 Because the source is byte-identical, any visible difference is attributable to the
 init sequence alone. The sketch prints its compiled driver name over serial and on
 screen, so the build and the physical panel can be compared directly.
 
-The on-screen test pattern is chosen against specific failure modes:
-- four-band full-width fill → a missing or truncated band is visible with no
-  reading required; on a mis-initialised clone the **last** band is the one that goes
-- column ruler labelled every 40 px, last addressable column marked red → panel width
-  vs. driver's claimed width
-- **two** pass/fail strings, one per axis: right-aligned `RIGHT-EDGE OK` and
-  bottom-aligned `LAST-ROW OK`, plus a solid bar hard against the final row. Both
-  must be fully readable. A single-axis marker passes in the rotations where the
-  dead region happens to sit on the other axis — this is why there are two.
-- asymmetric `FR7` text + `BL`/`BR` corner labels → mirror detection (see §3.2)
-- cycles all four rotations
+The sketch draws, in this order:
+
+1. **Wipe test** — full-canvas flat fills, white/navy alternating, in all four
+   rotations. **This is the only pass/fail check**; see the CRITICAL note in §2.
+   Any patch that keeps showing the previous screen is outside the addressable
+   window.
+2. four-band full-width fill → an unreachable region is visible with no reading
+   required, and whatever survives from the previous screen proves the wipe could
+   not clear it
+3. column ruler labelled every 40 px, last addressable column marked red
+4. `RIGHT-EDGE OK` (right-aligned) and `LAST-ROW OK` (against the final row)
+5. asymmetric `FR7` text + `BL`/`BR` corner labels → mirror detection (see §3.2)
+
+Items 3–5 are **diagnosis, not a verdict**. They all render correctly on a broken
+panel. They exist to catch a driver that disagrees with *itself* about the canvas
+size, and to catch mirroring — different faults from the headline one. If a user
+reports that these markers look right, that is expected and tells you nothing
+about item 1.
+
+`docs/img/` holds photographs of the real failure on real hardware, including a
+shot where every marker in items 3–5 reads as a pass while a quarter of the panel
+is stale.
 
 Whole TFT_eSPI config lives in `build_flags` with `USER_SETUP_LOADED`; the library's
 own `User_Setup.h` is never edited, so a `pio lib update` cannot silently revert it.
 
 ## 6. Answering questions about this — priority order
 
-1. If the screen is **partially addressed with a stable boundary that sits in the
-   same place every boot** → §2, §3. This is the headline issue; do not diagnose
-   wiring first, and do not be thrown by whether the user describes it as a bottom
-   band or a side strip — §2 explains why those are the same fault.
+1. If part of the screen **never updates**, with clean straight edges → §2, §3.
+   This is the headline issue; do not diagnose wiring first. Do not be thrown by
+   which edge the user describes — it moves with rotation. If the user says
+   on-screen test markers "all pass", that is expected and proves nothing; ask
+   them to run a full-screen fill instead.
 2. If colours are wrong but the whole screen is addressed → `TFT_INVERSION_ON`.
 3. If text is mirrored but geometry is fine → rotation index / MADCTL, §3.2.
 4. If the artefact moves, flickers, or tracks SPI clock → signal integrity, drop
