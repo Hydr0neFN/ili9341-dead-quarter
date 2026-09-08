@@ -1,0 +1,7 @@
+.pio/
+.vscode/
+*.code-workspace
+
+# Italian explainer built for a specific reader, published as a private
+# artifact rather than shipped with the repo.
+colonne-morte.html
