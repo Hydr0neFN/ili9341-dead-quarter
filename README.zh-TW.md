@@ -77,6 +77,22 @@ marker 都會回報通過。錯的不是畫布，是那塊畫布落在玻璃上�
 `LAST-ROW OK` 都讀得清楚 —— 而面板有一條還顯示著上一頁。這張照片就是 wipe test 存在的理由。
 （`LAST-ROW OK` 是畫在畫布底部的，這裡出現在標題區 —— 那就是繞回。）*
 
+### 正常的時候長什麼樣
+
+| | |
+|---|---|
+| ![深藍色填滿整片面板、均勻無殘留](docs/img/right-wipe-pass.jpg) | ![rotation 0 的診斷頁完整顯示：ruler 到 239、RIGHT-EDGE OK、LAST-ROW OK 在底部、BL 與 BR 在角落](docs/img/right-rot0-full.jpg) |
+| `ILI9341_2_DRIVER`，同一塊板、同樣接線。填色蓋滿整片面板 —— 這才叫通過。 | `rotation=0`，`240x320`。整頁裝得下，ruler 到 `239`，`FR7` 從左讀到右，`BL` / `BR` 在該在的下方兩角。 |
+
+![rotation 3 的診斷頁，320x240，ruler 一路到 319，沒有任何東西繞出去](docs/img/right-rot3-full.jpg)
+
+*`rotation=3`，`320x240`。橫式也正常，ruler 到 `319`，沒有繞回。*
+
+**注意後兩張的顏色。** Sketch 是用 `TFT_BLACK` 清畫面、`FR7` 畫綠色的；面板顯示的卻是白底、紫色的
+`FR7`。那就是下面的副作用 1 —— **這片模組另外還需要 `TFT_INVERSION_ON`**。幾何修好了、顏色沒有，
+這是「兩者是不同問題」最乾淨的示範。`platformio.ini` 裡那個 flag 是故意留成註解的：
+你的模組出現這個症狀就打開，顏色本來就正常就別動它。
+
 ---
 
 ## 到底哪裡壞了

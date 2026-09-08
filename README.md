@@ -98,6 +98,27 @@ panel is still showing the previous screen. This photo is why the wipe test
 exists. (`LAST-ROW OK` is drawn at the bottom of the canvas and appears in the
 header here; that is the wrap.)*
 
+### What it looks like when it's right
+
+| | |
+|---|---|
+| ![A full-screen navy fill covering the entire panel evenly, with no leftover patch anywhere](docs/img/right-wipe-pass.jpg) | ![The diagnosis page at rotation 0, complete: ruler to 239, RIGHT-EDGE OK, LAST-ROW OK at the bottom, BL and BR in the corners](docs/img/right-rot0-full.jpg) |
+| `ILI9341_2_DRIVER`, same board, same wiring. The wipe covers the whole panel — this is a pass. | `rotation=0`, `240x320`. The whole page fits, the ruler reaches `239`, `FR7` reads left to right, and `BL` / `BR` are in the bottom corners where they belong. |
+
+![The diagnosis page at rotation 3, 320x240, ruler running to 319, everything
+inside the panel](docs/img/right-rot3-full.jpg)
+
+*`rotation=3`, `320x240`. Landscape works too, ruler out to `319`, nothing
+wrapping.*
+
+**Note the colours in those last two.** The sketch clears to `TFT_BLACK` and
+draws `FR7` in green; the panel shows a white background and a purple `FR7`.
+That is side-effect 1 below — **this particular module also needs
+`TFT_INVERSION_ON`**. The geometry is fixed and the colours are not, which is the
+cleanest illustration of why those are two separate problems. The flag is left
+commented out in `platformio.ini` on purpose: enable it if your module shows this,
+leave it alone if your colours already look right.
+
 ---
 
 ## What is actually wrong
